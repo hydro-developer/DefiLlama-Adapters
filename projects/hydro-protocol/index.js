@@ -9,20 +9,53 @@ const { get } = require("../helper/http");
 const autoCompound = "inj1mjcg8a73904rj4w7t5qkgn0apua98n059nufma"
 const lrpManager = "inj1rv7ztpa8nkywc89a05eys52fzgezlnzjq3grkz"
 const vaultMaster = "inj1vcqkkvqs7prqu70dpddfj7kqeqfdz5gg662qs3"
+const loan = "inj1nuw6ala2ra7t457tg4g04k67r94v55mdyq9klr";
 
 // Token
+const inj = "inj";
 const hinj = "inj18luqttqyckgpddndh8hvaq25d5nfwjc78m56lc"
 const hdro = "factory/inj1etz0laas6h7vemg3qtd67jpr6lh8v7xz7gfzqw/hdro"
+const usdt = "peggy0xdAC17F958D2ee523a2206206994597C13D831ec7";
 const xhdro = "inj1qc2tw477wwuvkad0h3g78xqgwx4k8knat6vz0h"
+
+const denoms = [
+  { native: inj },
+  { cw20: hinj },
+  { native: hdro },
+  { native: usdt },
+];
 
 // Market
 const hdroInjMarket = "0xc8fafa1fcab27e16da20e98b4dc9dda45320418c27db80663b21edac72f3b597"
 
 const geckoId = "hydro-protocol"
 
-const injectiveSpotApi = new IndexerGrpcSpotApi("https://sentry.exchange.grpc-web.injective.network:443")
-const injectiveMitoApi = new IndexerGrpcMitoApi("https://k8s.mainnet.mito.grpc-web.injective.network")
+const injectiveSpotApi = new IndexerGrpcSpotApi("https://sentry.exchange.grpc-web.injective.network:443");
+const injectiveMitoApi = new IndexerGrpcMitoApi("https://k8s.mainnet.mito.grpc-web.injective.network");
 const injectiveClient = getClient()
+
+async function getLoanTvl(api) {
+  let tvl = new BigNumber(0);
+  for (const denom of denoms) {
+    const [
+      assetStateResponse,
+      priceResponse,
+      assetConfigResponse,
+    ] = await Promise.all([
+      queryContract({ chain: api.chain, contract: hinj, data: { asset_state: denom } }),
+      queryContract({ chain: api.chain, contract: hinj, data: { asset_state: denom } }),
+      queryContract({ chain: api.chain, contract: hinj, data: { asset_config: denom } }),
+    ]);
+
+    const decimals = new BigNumber(assetConfigResponse.decimals);
+    const price = new BigNumber(priceResponse.price);
+    const amount = new BigNumber(assetStateResponse.collateral.amount);
+    const amountDownScaled = amount.div(new BigNumber(10).pow(decimals));
+    const usdValue = amountDownScaled.times(price);
+    tvl = tvl.plus(usdValue);
+  }
+  return tvl;
+}
 
 async function getHinj(api) {
   const { total_supply } = await queryContract({ chain: api.chain, contract: hinj, data: { token_info: {} } })
@@ -100,7 +133,7 @@ async function getLrp(api) {
     }
 
     const lrpUsdValue = new BigNumber(lpPrice).multipliedBy(lrpTotalSupply)
-    const lrpUsdtValue = lrpUsdValue.multipliedBy(10 ** 6)
+    const lrpUsdtValue = lrpUsdValue.multipliedBy(1e6)
     sumOfLrpUsdtValue = sumOfLrpUsdtValue.plus(lrpUsdtValue)
   }
 
@@ -122,6 +155,7 @@ async function tvl(api) {
   injAmount = injAmount.plus(await getHinj(api))
   injAmount = injAmount.plus(await getAutoCompound(api))
   usdtAmount = usdtAmount.plus(await getLrp(api))
+  usdtAmount = usdtAmount.plus(await getLoanTvl(api));
 
   api.add(
     ADDRESSES.injective.INJ, injAmount.toFixed(0)
